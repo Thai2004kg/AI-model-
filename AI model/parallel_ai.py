@@ -1,9 +1,13 @@
 # parallel_ai.py
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from ai_providers import ask_llama
 
 
-def run_parallel_ai(ai_functions: dict, prompt: str, timeout: int = 90) -> dict:
+def run_parallel_ai(ai_functions: dict, prompt: str, timeout: int = 180) -> dict:
+    """
+    Chạy nhiều AI song song.
+    """
     results = {}
 
     if not ai_functions:
@@ -22,7 +26,9 @@ def run_parallel_ai(ai_functions: dict, prompt: str, timeout: int = 90) -> dict:
                 answer = future.result(timeout=timeout)
 
                 if answer and str(answer).strip() != "":
-                    results[name] = answer.strip()
+                    results[name] = str(answer).strip()
+                else:
+                    results[name] = f"[{name} lỗi] Không có phản hồi."
 
             except Exception as e:
                 results[name] = f"[{name} lỗi] {e}"
@@ -31,37 +37,78 @@ def run_parallel_ai(ai_functions: dict, prompt: str, timeout: int = 90) -> dict:
 
 
 def combine_answers_to_one(results: dict, finance_summary: str) -> str:
+    """
+    Tổng hợp nhiều phản hồi AI thành một câu trả lời cuối.
+    Dùng Llama làm model tổng hợp.
+    """
     valid_answers = []
+    error_answers = []
 
-    for _, answer in results.items():
+    for name, answer in results.items():
         if not answer:
             continue
 
-        if str(answer).startswith("["):
-            continue
+        answer = str(answer).strip()
 
-        valid_answers.append(answer.strip())
+        if answer.startswith("["):
+            error_answers.append(answer)
+        else:
+            valid_answers.append(f"{name}: {answer}")
 
     if not valid_answers:
-        return f"""
-Dựa trên dữ liệu hiện tại:
+        error_text = "\n".join(f"- {err}" for err in error_answers)
 
+        return f"""
+Hiện tại hệ thống chưa nhận được phản hồi phù hợp từ AI.
+
+Dữ liệu tài chính hiện có:
 {finance_summary}
 
-Hệ thống chưa nhận được phản hồi phù hợp từ AI. Tuy nhiên, bạn nên theo dõi nhóm chi tiêu lớn nhất và hạn chế các khoản không cần thiết.
+Lỗi AI ghi nhận:
+{error_text if error_text else "- Không có thông tin lỗi."}
 """.strip()
 
     if len(valid_answers) == 1:
-        return valid_answers[0]
+        return valid_answers[0].split(":", 1)[1].strip()
 
-    return f"""
-Dựa trên dữ liệu tài chính hiện tại:
+    ai_raw_text = "\n\n".join(valid_answers)
 
+    final_prompt = f"""
+Bạn là AI tổng hợp câu trả lời cuối cùng cho một hệ thống quản lý tài chính cá nhân.
+
+Dữ liệu tài chính thật:
 {finance_summary}
 
-Nhận xét tổng hợp:
-{valid_answers[0]}
+Các phản hồi thô từ nhiều AI:
+{ai_raw_text}
 
-Bổ sung:
-{valid_answers[1]}
-""".strip()
+Nhiệm vụ:
+Hãy tổng hợp thành MỘT câu trả lời cuối cùng cho người dùng.
+
+Yêu cầu bắt buộc:
+1. Trả lời bằng tiếng Việt tự nhiên, dễ hiểu.
+2. Không ghi "AI này nói", "AI kia nói", "Nhận xét tổng hợp", "Bổ sung".
+3. Không bịa số liệu.
+4. Không lặp lại quá nhiều số liệu.
+5. Giữ lại ý đúng và hữu ích nhất từ các phản hồi.
+6. Nếu các phản hồi mâu thuẫn, hãy ưu tiên ý dựa sát dữ liệu tài chính thật.
+7. Câu trả lời phải đủ sâu, có phân tích và có gợi ý hành động.
+8. Nếu câu hỏi đơn giản thì trả lời ngắn.
+9. Nếu câu hỏi cần lập kế hoạch thì trả lời chi tiết hơn.
+10. Không trả lời chung chung.
+
+Cấu trúc nên dùng:
+- Kết luận chính
+- Phân tích dựa trên số liệu
+- Gợi ý hành động
+- Hướng khác có thể cân nhắc, nếu phù hợp
+
+Hãy viết như một trợ lý tài chính đang tư vấn cho sinh viên.
+"""
+
+    final_answer = ask_llama(final_prompt)
+
+    if final_answer and not str(final_answer).startswith("["):
+        return final_answer.strip()
+
+    return valid_answers[0].split(":", 1)[1].strip()
